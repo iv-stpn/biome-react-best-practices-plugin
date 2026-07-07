@@ -1,0 +1,4 @@
+[
+  { "line": 2, "rule": "no-props-mutation" },
+  { "line": 3, "rule": "no-props-mutation" }
+]

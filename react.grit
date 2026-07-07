@@ -1,0 +1,218 @@
+engine biome(1.0)
+language js
+
+// biome-react-best-practices-plugin: React correctness & performance rules.
+//
+// Structurally lints React components for the mistakes that cause bugs
+// (render loops, remounting subtrees, mutated props) and the ones that quietly
+// defeat memoization (new object/array/function/JSX references passed as props
+// on every render). Every rule reports a diagnostic only (no auto-fix): the
+// right correction is context-specific, so the plugin flags the hazard and
+// leaves the fix to the author.
+//
+// Rules:
+//   react/no-use-effect                   — direct `useEffect(...)` calls.
+//   react/no-nested-component-definitions — a component defined inside another component.
+//   react/no-set-state-in-render          — a `setX(...)` state update called during render.
+//   react/no-props-mutation              — mutating `props` (react-compiler: props are immutable).
+//   react/no-inline-object-prop           — object literal passed as a prop to a custom component.
+//   react/no-inline-array-prop            — array literal passed as a prop to a custom component.
+//   react/no-inline-function-prop         — function literal passed as a prop to a custom component.
+//   react/no-jsx-as-prop                  — JSX element passed as a prop to a custom component.
+//
+// Inspired by biome-plugin-no-use-effect and the ESLint rules
+// react/no-unstable-nested-components, react-hooks set-state-in-render,
+// react-compiler, and eslint-plugin-react-perf.
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+// A React component name: PascalCase (starts with an uppercase letter). Biome's
+// GritQL regex is fully anchored, so this must match the ENTIRE identifier.
+pattern component_name() {
+    r"[A-Z][a-zA-Z0-9_]*"
+}
+
+// A state setter name: `set` followed by an uppercase letter, e.g. setCount.
+// Anchored, so the trailing `[a-zA-Z0-9_]*` is required to match the full name.
+pattern setter_name() {
+    r"set[A-Z][a-zA-Z0-9_]*"
+}
+
+// The node is inside a JSX element whose tag is a custom (PascalCase) component.
+// Inline props only break memoization for components that can memoize; host
+// elements (`div`, `span`, …) re-render regardless, so they are not flagged.
+// Covers both `<Comp .../>` (self-closing) and `<Comp ...>children</Comp>`.
+pattern within_custom_element() {
+    within or {
+        JsxSelfClosingElement(name = $jsx_tag) where { $jsx_tag <: component_name() },
+        JsxOpeningElement(name = $jsx_tag) where { $jsx_tag <: component_name() }
+    }
+}
+
+// NOTE: the "inside a component" ancestor guard is written inline in the
+// set-state rule rather than factored into a `pattern` helper. Biome's GritQL
+// fails to compile a named `pattern` that contains `js"..."` code snippets with
+// inner `where` metavariable guards; the same guard compiles fine inline.
+
+or {
+    // Rule: react/no-use-effect
+    // Bad:  useEffect(() => { fetchData(); }, [id]);
+    // Good: derive state during render, handle events in handlers, or fetch with
+    //       a data library / framework loader. Mount-only effects can go through
+    //       a dedicated wrapper (e.g. useMountEffect) that suppresses this rule.
+    // useEffect is the source of a large share of React bugs (stale closures,
+    // missing deps, effect cascades). The rule steers code away from reaching
+    // for it reflexively.
+    `useEffect($_)` as $effect where {
+        register_diagnostic(
+            span = $effect,
+            message = "[react/no-use-effect] Avoid useEffect. Prefer derived state, event handlers, or a data-fetching library; for a genuine mount-only effect use a dedicated wrapper (e.g. useMountEffect).",
+            severity = "warn"
+        )
+    },
+
+    // Rule: react/no-nested-component-definitions
+    // Bad:  function Parent() { function Child() { return <div/>; } ... }
+    // Good: define Child at module scope and pass data via props.
+    // A component declared inside another component is a brand-new function on
+    // every render, so React unmounts and remounts its entire subtree each time
+    // — losing state and DOM, and tanking performance.
+    // The `$outer <: not $decl` guard makes the ancestor match STRICT: Biome's
+    // `within` is reflexive (a node is within itself), so without it every
+    // top-level component would match itself as its own parent.
+    js"function $Inner($pip) { $pib }" as $decl where {
+        $Inner <: component_name(),
+        $decl <: within or {
+            js"function $po($pop) { $pob }" as $outer where { $po <: component_name(), $outer <: not $decl },
+            js"const $po = ($poap) => $poab" as $outer where { $po <: component_name(), $outer <: not $decl }
+        },
+        register_diagnostic(
+            span = $decl,
+            message = "[react/no-nested-component-definitions] Component defined inside another component. It is recreated every render, so React remounts its subtree (losing state). Move it to module scope and pass data via props.",
+            severity = "error"
+        )
+    },
+    js"const $Inner = ($pip) => $pib" as $decl where {
+        $Inner <: component_name(),
+        $pib <: contains JsxTagExpression(),
+        $decl <: within or {
+            js"function $po($pop) { $pob }" as $outer where { $po <: component_name(), $outer <: not $decl },
+            js"const $po = ($poap) => $poab" as $outer where { $po <: component_name(), $outer <: not $decl }
+        },
+        register_diagnostic(
+            span = $decl,
+            message = "[react/no-nested-component-definitions] Component defined inside another component. It is recreated every render, so React remounts its subtree (losing state). Move it to module scope and pass data via props.",
+            severity = "error"
+        )
+    },
+
+    // Rule: react/no-set-state-in-render
+    // Bad:  function Comp() { const [n, setN] = useState(0); setN(1); ... }
+    // Good: call the setter from an event handler or an effect, or derive the
+    //       value during render instead of storing it.
+    // Calling a state setter synchronously during render triggers an immediate
+    // re-render, risking an infinite loop. The guards exclude the legitimate
+    // deferred cases: JSX event handlers, callbacks passed to another call
+    // (useEffect, addEventListener, …), and inner handlers assigned to a
+    // lowercase-named variable/const.
+    `$setter($_)` as $call where {
+        $setter <: setter_name(),
+        $call <: within or {
+            js"function $pcomp($pcp) { $pcb }" where { $pcomp <: component_name() },
+            js"const $pcomp = ($pap) => $pab" where { $pcomp <: component_name() }
+        },
+        not $call <: within JsxExpressionAttributeValue(),
+        not $call <: within js"$pcallee($pcbargs)" where { $pcbargs <: contains $call },
+        not $call <: within js"const $ph = ($php) => $phb" where { $ph <: r"[a-z][a-zA-Z0-9_]*" },
+        not $call <: within js"const $ph = function($php) { $phb }" where { $ph <: r"[a-z][a-zA-Z0-9_]*" },
+        register_diagnostic(
+            span = $call,
+            message = "[react/no-set-state-in-render] State setter called during render. This re-renders immediately and can loop forever. Call it from an event handler or effect, or derive the value instead of storing it.",
+            severity = "error"
+        )
+    },
+
+    // Rule: react/no-props-mutation
+    // Bad:  props.count = 5;  /  props.items.push(x);
+    // Good: treat props as immutable; compute a new local value instead.
+    // React (and the React Compiler) assume props are never mutated. Writing to
+    // a prop breaks memoization assumptions and produces inconsistent renders.
+    js"$obj.$pprop = $_" as $assign where {
+        $obj <: r"props",
+        register_diagnostic(
+            span = $assign,
+            message = "[react/no-props-mutation] Mutating props. Props are immutable in React; the compiler and memoization assume this. Compute a new local value instead of writing to props.",
+            severity = "error"
+        )
+    },
+    `props.$_.$method($_)` as $call where {
+        $method <: or { `push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, `copyWithin` },
+        register_diagnostic(
+            span = $call,
+            message = "[react/no-props-mutation] Mutating a prop array in place. Props are immutable in React; copy the array (e.g. [...props.items]) before mutating.",
+            severity = "error"
+        )
+    },
+
+    // Rule: react/no-inline-object-prop  (eslint-plugin-react-perf)
+    // Bad:  <Widget style={{ color: "red" }} />
+    // Good: hoist the object or wrap it in useMemo so its identity is stable.
+    // A fresh object literal is a new reference every render, so a memoized
+    // child re-renders anyway. Only flagged on custom (PascalCase) components —
+    // host elements can't be memoized, so it would be noise there.
+    JsxExpressionAttributeValue(expression = JsObjectExpression()) as $prop where {
+        $prop <: within_custom_element(),
+        register_diagnostic(
+            span = $prop,
+            message = "[react/no-inline-object-prop] Inline object prop creates a new reference every render, defeating memoization of the child. Hoist it or wrap it in useMemo.",
+            severity = "warn"
+        )
+    },
+
+    // Rule: react/no-inline-array-prop  (eslint-plugin-react-perf)
+    // Bad:  <Widget items={[1, 2, 3]} />
+    // Good: hoist the array or wrap it in useMemo.
+    JsxExpressionAttributeValue(expression = JsArrayExpression()) as $prop where {
+        $prop <: within_custom_element(),
+        register_diagnostic(
+            span = $prop,
+            message = "[react/no-inline-array-prop] Inline array prop creates a new reference every render, defeating memoization of the child. Hoist it or wrap it in useMemo.",
+            severity = "warn"
+        )
+    },
+
+    // Rule: react/no-inline-function-prop  (eslint-plugin-react-perf)
+    // Bad:  <Widget onSelect={() => go()} />  /  <Widget onSelect={function () {}} />
+    // Good: wrap the handler in useCallback (or hoist it) so its identity holds.
+    JsxExpressionAttributeValue(expression = JsArrowFunctionExpression()) as $prop where {
+        $prop <: within_custom_element(),
+        register_diagnostic(
+            span = $prop,
+            message = "[react/no-inline-function-prop] Inline function prop creates a new reference every render, defeating memoization of the child. Wrap it in useCallback or hoist it.",
+            severity = "warn"
+        )
+    },
+    JsxExpressionAttributeValue(expression = JsFunctionExpression()) as $prop where {
+        $prop <: within_custom_element(),
+        register_diagnostic(
+            span = $prop,
+            message = "[react/no-inline-function-prop] Inline function prop creates a new reference every render, defeating memoization of the child. Wrap it in useCallback or hoist it.",
+            severity = "warn"
+        )
+    },
+
+    // Rule: react/no-jsx-as-prop  (eslint-plugin-react-perf)
+    // Bad:  <Widget icon={<Icon />} />
+    // Good: hoist the element to a variable, or pass a component/render prop.
+    // A JSX element literal is a new React element object every render.
+    JsxExpressionAttributeValue(expression = JsxTagExpression()) as $prop where {
+        $prop <: within_custom_element(),
+        register_diagnostic(
+            span = $prop,
+            message = "[react/no-jsx-as-prop] Inline JSX element prop creates a new element every render, defeating memoization of the child. Hoist it to a stable variable or pass a component/render prop.",
+            severity = "warn"
+        )
+    }
+}

@@ -1,0 +1,5 @@
+[
+  { "line": 2, "rule": "no-nested-component-definitions" },
+  { "line": 5, "rule": "no-nested-component-definitions" },
+  { "line": 15, "rule": "no-nested-component-definitions" }
+]
