@@ -1,0 +1,5 @@
+[
+  { "line": 6, "rule": "no-set-state-in-render" },
+  { "line": 13, "rule": "no-set-state-in-render" },
+  { "line": 20, "rule": "no-set-state-in-render" }
+]

@@ -40,6 +40,15 @@ pattern setter_name() {
     r"set[A-Z][a-zA-Z0-9_]*"
 }
 
+// A render-context name: either a component (PascalCase) or a custom hook
+// (`use` + an uppercase letter, e.g. useCounter). Both run their body during
+// render, so a state setter called directly in either — not inside a nested
+// function — is a set-state-in-render hazard. Anchored (must match the whole
+// name); the `[a-z...]` alternative excludes lowercase `use`-less helpers.
+pattern render_context_name() {
+    or { r"[A-Z][a-zA-Z0-9_]*", r"use[A-Z][a-zA-Z0-9_]*" }
+}
+
 // The node is inside a JSX element whose tag is a custom (PascalCase) component.
 // Inline props only break memoization for components that can memoize; host
 // elements (`div`, `span`, …) re-render regardless, so they are not flagged.
@@ -113,20 +122,32 @@ or {
     // Good: call the setter from an event handler or an effect, or derive the
     //       value during render instead of storing it.
     // Calling a state setter synchronously during render triggers an immediate
-    // re-render, risking an infinite loop. The guards exclude the legitimate
-    // deferred cases: JSX event handlers, callbacks passed to another call
-    // (useEffect, addEventListener, …), and inner handlers assigned to a
-    // lowercase-named variable/const.
+    // re-render, risking an infinite loop.
+    //
+    // A setter runs "during render" only when its NEAREST enclosing function is
+    // the component/hook itself — i.e. no other function boundary sits between
+    // the call and the component. So the rule matches a setter that is inside a
+    // component or hook ($comp, bound to the function node) but NOT inside any
+    // function that is *strictly nested* within that component ($inner). This is
+    // the structural definition, so it excludes every deferred case at once:
+    // named function declarations, nested arrows/handlers, effect and array
+    // callbacks, event handlers — without enumerating each shape.
+    //
+    // $comp binds the function NODE (not the enclosing `const` declaration), so
+    // for an arrow/function-expression component the component's own function is
+    // not mistaken for a nested one. `$inner <: not $comp` keeps the nested-ness
+    // strict (Biome's `within` is reflexive).
     `$setter($_)` as $call where {
         $setter <: setter_name(),
         $call <: within or {
-            js"function $pcomp($pcp) { $pcb }" where { $pcomp <: component_name() },
-            js"const $pcomp = ($pap) => $pab" where { $pcomp <: component_name() }
+            js"function $pc($pcp) { $pcb }" as $comp where { $pc <: render_context_name() },
+            js"const $pc = $parrow" where { $pc <: render_context_name(), $parrow <: JsArrowFunctionExpression() as $comp },
+            js"const $pc = $pfn" where { $pc <: render_context_name(), $pfn <: JsFunctionExpression() as $comp }
         },
-        not $call <: within JsxExpressionAttributeValue(),
-        not $call <: within js"$pcallee($pcbargs)" where { $pcbargs <: contains $call },
-        not $call <: within js"const $ph = ($php) => $phb" where { $ph <: r"[a-z][a-zA-Z0-9_]*" },
-        not $call <: within js"const $ph = function($php) { $phb }" where { $ph <: r"[a-z][a-zA-Z0-9_]*" },
+        not $call <: within or { JsArrowFunctionExpression(), JsFunctionExpression(), JsFunctionDeclaration() } as $inner where {
+            $inner <: within $comp,
+            $inner <: not $comp
+        },
         register_diagnostic(
             span = $call,
             message = "[react/no-set-state-in-render] State setter called during render. This re-renders immediately and can loop forever. Call it from an event handler or effect, or derive the value instead of storing it.",

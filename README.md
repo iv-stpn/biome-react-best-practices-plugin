@@ -97,10 +97,14 @@ function Comp() {
 }
 ```
 
-Flags a `setX(...)` call (setter name matched as `set` + PascalCase) that sits directly in a component body.
-The guards exclude the legitimate deferred cases: JSX event-handler values (`onClick={() => setX()}`),
-callbacks passed to another call (`useEffect(() => setX())`, `addEventListener`, …), and inner handlers
-assigned to a lowercase-named `const` (`const handler = () => setX()`).
+Flags a `setX(...)` call (setter name matched as `set` + PascalCase) whose **nearest enclosing function is the
+component or hook itself** — i.e. no other function boundary sits between the call and the component. This is a
+structural definition, so it excludes *every* deferred case at once, without enumerating shapes: named function
+declarations (`function handleClick() { setX() }`), nested arrows/handlers (`const reset = () => setX()`), JSX
+event-handler values (`onClick={() => setX()}`), and callbacks passed to another call
+(`useEffect(() => setX())`, `items.map(() => setX())`, …). It covers all four render-context forms — function
+and arrow/function-expression components, plus function and arrow custom hooks (`useThing`) — since a setter run
+synchronously during a hook's render is a render-phase update too.
 
 ### no-props-mutation
 
@@ -149,10 +153,11 @@ partially or not at all:
   `useEffect`-named function, a non-setter `setSomething`, or a PascalCase non-component will also match. GritQL
   plugins can't yet take configuration, so the match is intentionally broad — scope the plugin with Biome's
   `includes`/`overrides` if false positives are a problem.
-- **`no-set-state-in-render`** is component-scoped (PascalCase functions/arrows). A setter called during a
-  custom hook's render (`useThing`) is not flagged, and an inner handler assigned to a lowercase `const` is
-  treated as deferred. `no-props-mutation` only tracks the literal identifier `props` (not a destructured
-  `{ config }`).
+- **`no-set-state-in-render`** treats any setter whose nearest enclosing function is *not* the component/hook as
+  deferred — including setters inside `items.map(() => setX())` callbacks that actually do run during render.
+  Distinguishing a render-time callback from a later one needs call-graph analysis GritQL lacks, so these are
+  not flagged (a false negative preferred over noise). `no-props-mutation` only tracks the literal identifier
+  `props` (not a destructured `{ config }`).
 
 ## Usage
 
