@@ -6,9 +6,10 @@ language js
 // Structurally lints React components for the mistakes that cause bugs
 // (render loops, remounting subtrees, mutated props) and the ones that quietly
 // defeat memoization (new object/array/function/JSX references passed as props
-// on every render). Every rule reports a diagnostic only (no auto-fix): the
+// on every render). Most rules report a diagnostic only (no auto-fix): the
 // right correction is context-specific, so the plugin flags the hazard and
-// leaves the fix to the author.
+// leaves the fix to the author. `prefer-usecallback` is the exception — it
+// carries an *unsafe* auto-fix (see its note below).
 //
 // Rules:
 //   react/no-use-effect                   — direct `useEffect(...)` calls.
@@ -19,6 +20,7 @@ language js
 //   react/no-inline-array-prop            — array literal passed as a prop to a custom component.
 //   react/no-inline-function-prop         — function literal passed as a prop to a custom component.
 //   react/no-jsx-as-prop                  — JSX element passed as a prop to a custom component.
+//   react/prefer-usecallback              — top-level render function → useCallback (unsafe auto-fix).
 //
 // Inspired by biome-plugin-no-use-effect and the ESLint rules
 // react/no-unstable-nested-components, react-hooks set-state-in-render,
@@ -235,5 +237,82 @@ or {
             message = "[react/no-jsx-as-prop] Inline JSX element prop creates a new element every render, defeating memoization of the child. Hoist it to a stable variable or pass a component/render prop.",
             severity = "warn"
         )
+    },
+
+    // Rule: react/prefer-usecallback  (UNSAFE auto-fix)
+    // Bad:  function View() { const handleClick = () => go(); ... }
+    // Good: function View() { const handleClick = useCallback(() => go(), [deps]); ... }
+    // A function created at the top level of a component/hook body is a brand-new
+    // reference on every render. Passed to a memoized child or used as a hook
+    // dependency, it silently defeats memoization. useCallback keeps its identity
+    // stable across renders.
+    //
+    // Scope mirrors no-set-state-in-render: the function's NEAREST enclosing
+    // function must be the component/hook itself ($comp) — never a function
+    // strictly nested inside it ($inner). So a handler declared inside another
+    // handler, an effect callback, or a `.map` callback is left alone. Names that
+    // are themselves a component or hook (PascalCase / `use*`) are excluded —
+    // those are nested components/hooks, a different concern.
+    //
+    // The fix is deliberately `unsafe` (applied only with `--write --unsafe`,
+    // shown as a suggestion otherwise) for three reasons GritQL cannot resolve:
+    //   1. It cannot compute the dependency array (that needs dataflow analysis),
+    //      so it inserts an empty `[]` you MUST complete — an empty array closes
+    //      over stale props/state.
+    //   2. It does not add the `useCallback` import.
+    //   3. The function-declaration form is converted to a `const`, which changes
+    //      hoisting (the name is no longer usable before its declaration line).
+    //
+    // Two forms. First: an arrow/function-expression assigned to a `const`. The
+    // rewrite wraps the function node itself, so `const`, name, and any type
+    // annotation are preserved untouched.
+    js"const $name = $fn" as $decl where {
+        $name <: not render_context_name(),
+        $fn <: or { JsArrowFunctionExpression(), JsFunctionExpression() },
+        $decl <: within or {
+            js"function $pc($pcp) { $pcb }" as $comp where { $pc <: render_context_name() },
+            js"const $pc = $parrow" where { $pc <: render_context_name(), $parrow <: JsArrowFunctionExpression() as $comp },
+            js"const $pc = $pfn" where { $pc <: render_context_name(), $pfn <: JsFunctionExpression() as $comp }
+        },
+        not $decl <: within or { JsArrowFunctionExpression(), JsFunctionExpression(), JsFunctionDeclaration() } as $inner where {
+            $inner <: within $comp,
+            $inner <: not $comp
+        },
+        register_diagnostic(
+            span = $fn,
+            message = "[react/prefer-usecallback] Function declared at the top level of a component/hook is a new reference every render. Wrap it in useCallback (and fill in its dependencies) so its identity is stable.",
+            severity = "warn",
+            fix_kind = "unsafe"
+        ),
+        $fn => `useCallback($fn, [])`
+    },
+    // Second: a `function` declaration. Converted to a `const` binding so it can be
+    // wrapped; `$inner <: not $decl` keeps the nested-ness strict (Biome's `within`
+    // is reflexive, so without it the declaration matches itself as its own
+    // enclosing nested function and is wrongly skipped). The `JsFunctionDeclaration()`
+    // guard is required: the `function $name(...) {...}` snippet also matches a
+    // function *expression* (`const X = function () {}`), whose empty `$name` slips
+    // past the name guard — so without it, PascalCase function-expression components
+    // would be rewritten too.
+    js"function $name($params) { $body }" as $decl where {
+        $decl <: JsFunctionDeclaration(),
+        $name <: not render_context_name(),
+        $decl <: within or {
+            js"function $pc($pcp) { $pcb }" as $comp where { $pc <: render_context_name() },
+            js"const $pc = $parrow" where { $pc <: render_context_name(), $parrow <: JsArrowFunctionExpression() as $comp },
+            js"const $pc = $pfn" where { $pc <: render_context_name(), $pfn <: JsFunctionExpression() as $comp }
+        },
+        not $decl <: within or { JsArrowFunctionExpression(), JsFunctionExpression(), JsFunctionDeclaration() } as $inner where {
+            $inner <: within $comp,
+            $inner <: not $comp,
+            $inner <: not $decl
+        },
+        register_diagnostic(
+            span = $decl,
+            message = "[react/prefer-usecallback] Function declared at the top level of a component/hook is a new reference every render. Wrap it in useCallback (and fill in its dependencies) so its identity is stable.",
+            severity = "warn",
+            fix_kind = "unsafe"
+        ),
+        $decl => `const $name = useCallback(($params) => { $body }, [])`
     }
 }

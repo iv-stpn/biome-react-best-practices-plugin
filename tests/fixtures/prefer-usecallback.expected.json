@@ -1,0 +1,7 @@
+[
+  { "line": 2, "rule": "prefer-usecallback" },
+  { "line": 3, "rule": "prefer-usecallback" },
+  { "line": 6, "rule": "prefer-usecallback" },
+  { "line": 13, "rule": "prefer-usecallback" },
+  { "line": 18, "rule": "prefer-usecallback" }
+]

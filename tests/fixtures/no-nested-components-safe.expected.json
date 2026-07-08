@@ -1,1 +1,3 @@
-[]
+[
+  { "line": 9, "rule": "prefer-usecallback" }
+]

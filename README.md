@@ -1,5 +1,7 @@
 # biome-react-best-practices-plugin
 
+[![npm version](https://img.shields.io/npm/v/biome-react-best-practices-plugin.svg)](https://www.npmjs.com/package/biome-react-best-practices-plugin)
+
 A [Biome](https://biomejs.dev) plugin (written in [GritQL](https://biomejs.dev/blog/gritql-biome)) that
 enforces React best practices — catching the component-level mistakes that cause render loops, remounted
 subtrees, and mutated props, plus the inline props that quietly defeat memoization.
@@ -38,9 +40,11 @@ const next = { ...props, count: 5 };                // copy instead of mutating
 | `react/no-inline-array-prop` | an array literal passed as a prop to a custom component | Same as above for arrays. | warn |
 | `react/no-inline-function-prop` | a function literal (arrow or `function`) passed as a prop to a custom component | Same as above for functions; wrap in `useCallback` or hoist. | warn |
 | `react/no-jsx-as-prop` | a JSX element passed as a prop to a custom component | A JSX literal is a new element object every render. | warn |
+| `react/prefer-usecallback` | a function declared at the top level of a component/hook body (arrow, function expression, or `function` declaration) | Each render creates a new function reference; passed to a memoized child or used as a hook dependency, it defeats memoization. Wrapping it in `useCallback` keeps the identity stable. | warn (unsafe auto-fix) |
 
-All rules report a diagnostic only (category `plugin`); none apply an auto-fix, because the correct repair is
-context-specific — the plugin flags the hazard and leaves the fix to you.
+Most rules report a diagnostic only (category `plugin`) with no auto-fix, because the correct repair is
+context-specific — the plugin flags the hazard and leaves the fix to you. The one exception is
+`react/prefer-usecallback`, which carries an **unsafe** auto-fix (see its note below).
 
 ### no-use-effect
 
@@ -134,6 +138,46 @@ subset of the React Compiler's immutability checks (see [Limitations](#limitatio
 The four inline-prop rules fire only when the enclosing element is a **custom (PascalCase) component** —
 `<Widget />`, not `<div />`. Host elements can't be memoized, so flagging inline props there would be noise.
 This is a deliberate narrowing of `eslint-plugin-react-perf`, which flags all elements.
+
+### prefer-usecallback
+
+```tsx
+// flagged — new function reference every render
+function View() {
+  const handleClick = () => go();          // arrow assigned to a const
+  const handleSave = function () { save(); }; // function expression
+  function handleReset() { reset(); }       // function declaration
+  return <Child onClick={handleClick} />;
+}
+
+// safe — already stable, or not a top-level render function
+function View() {
+  const handleClick = useCallback(() => go(), [/* deps */]);
+  return <button onClick={() => act()} />;  // inline JSX handler, not a declaration
+}
+```
+
+Flags any function created at the **top level of a component/hook body** — an arrow or function expression
+assigned to a `const`, or a `function` declaration. The scope mirrors `no-set-state-in-render`: the function's
+*nearest enclosing function* must be the component/hook itself, so a handler declared inside another handler, an
+effect callback, or a `.map` callback is left alone. Names that are themselves a component or custom hook
+(PascalCase or `use*`) are excluded — those are nested components/hooks, covered by
+`no-nested-component-definitions`.
+
+**This is the plugin's only auto-fix, and it is deliberately `unsafe`** — applied only with
+`biome lint --write --unsafe`, shown as a suggestion otherwise. It wraps the function in `useCallback(fn, [])`.
+Three things GritQL structurally cannot resolve, which you must fix by hand after applying it:
+
+1. **The dependency array is left empty (`[]`)** — computing the real dependencies needs dataflow analysis
+   GritQL cannot do. An empty array closes over stale props/state; fill it in.
+2. **The `useCallback` import is not added.**
+3. **A `function` declaration is converted to a `const`**, which changes hoisting — the name is no longer usable
+   above its declaration line.
+
+It also does not judge *whether* a given function benefits from `useCallback` — wrapping a handler that is
+never passed to a memoized child or used as a dependency adds overhead for no gain (see React's own
+[guidance](https://react.dev/reference/react/useCallback#should-you-add-usecallback-everywhere)). Treat the
+rule as a prompt to review each site, not a blanket mandate.
 
 ## Limitations
 
