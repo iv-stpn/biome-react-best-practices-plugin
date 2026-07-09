@@ -1,6 +1,6 @@
 {
   "name": "biome-react-best-practices-plugin",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Biome plugin that enforces React best practices — no useEffect, no nested component definitions, no setState in render, and no unstable props (inline objects/arrays/functions/JSX).",
   "license": "ISC",
   "author": "Ivan Stepanian <iv.stpn@gmail.com>",
