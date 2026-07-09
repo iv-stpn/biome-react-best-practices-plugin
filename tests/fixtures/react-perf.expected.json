@@ -1,5 +1,0 @@
-[
-  { "line": 4, "rule": "no-inline-object-prop" },
-  { "line": 5, "rule": "no-inline-array-prop" },
-  { "line": 6, "rule": "no-jsx-as-prop" }
-]

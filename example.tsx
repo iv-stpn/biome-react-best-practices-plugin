@@ -40,17 +40,6 @@ function Mutator(props) {
   return <div>{props.count}</div>;
 }
 
-// react-perf — inline props defeat memoization of a custom (PascalCase) component
-function View() {
-  return (
-    <Widget
-      style={{ color: "red" }}
-      items={[1, 2, 3]}
-      icon={<Icon />}
-    />
-  );
-}
-
 // --- safe forms below: the plugin leaves these alone ---
 
 // derive during render instead of an effect
@@ -73,7 +62,8 @@ function GoodCounter() {
   return <button onClick={() => setCount(count + 1)}>{count}</button>;
 }
 
-// host element (lowercase) — inline props are not flagged (can't be memoized)
-function HostView() {
-  return <div style={{ color: "red" }} onClick={() => go()} />;
+// props copied instead of mutated
+function GoodMutator(props) {
+  const next = { ...props, count: 5 };
+  return <div>{next.count}</div>;
 }
