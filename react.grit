@@ -6,10 +6,11 @@ language js
 // Structurally lints React components for the mistakes that cause bugs
 // (render loops, remounting subtrees, mutated props) and the ones that quietly
 // defeat memoization (new object/array/function/JSX references passed as props
-// on every render). Most rules report a diagnostic only (no auto-fix): the
+// on every render). Every rule reports a diagnostic only (no auto-fix): the
 // right correction is context-specific, so the plugin flags the hazard and
-// leaves the fix to the author. `prefer-usecallback` is the exception — it
-// carries an *unsafe* auto-fix (see its note below).
+// leaves the fix to the author. `prefer-usecallback` diagnostics can be applied
+// as a codemod by the companion `fixers/prefer-usecallback.ts` — run it AFTER
+// `biome check --write .`.
 //
 // Rules:
 //   react/no-use-effect                   — direct `useEffect(...)` calls.
@@ -20,7 +21,7 @@ language js
 //   react/no-inline-array-prop            — array literal passed as a prop to a custom component.
 //   react/no-inline-function-prop         — function literal passed as a prop to a custom component.
 //   react/no-jsx-as-prop                  — JSX element passed as a prop to a custom component.
-//   react/prefer-usecallback              — top-level render function → useCallback (unsafe auto-fix).
+//   react/prefer-usecallback              — top-level render function → useCallback (codemod: fixers/prefer-usecallback.ts).
 //
 // Inspired by biome-plugin-no-use-effect and the ESLint rules
 // react/no-unstable-nested-components, react-hooks set-state-in-render,
@@ -239,7 +240,7 @@ or {
         )
     },
 
-    // Rule: react/prefer-usecallback  (UNSAFE auto-fix)
+    // Rule: react/prefer-usecallback  (diagnostic only; fixed by a companion script)
     // Bad:  function View() { const handleClick = () => go(); ... }
     // Good: function View() { const handleClick = useCallback(() => go(), [deps]); ... }
     // A function created at the top level of a component/hook body is a brand-new
@@ -254,18 +255,24 @@ or {
     // are themselves a component or hook (PascalCase / `use*`) are excluded —
     // those are nested components/hooks, a different concern.
     //
-    // The fix is deliberately `unsafe` (applied only with `--write --unsafe`,
-    // shown as a suggestion otherwise) for three reasons GritQL cannot resolve:
-    //   1. It cannot compute the dependency array (that needs dataflow analysis),
-    //      so it inserts an empty `[]` you MUST complete — an empty array closes
-    //      over stale props/state.
-    //   2. It does not add the `useCallback` import.
-    //   3. The function-declaration form is converted to a `const`, which changes
-    //      hoisting (the name is no longer usable before its declaration line).
+    // This rule reports a diagnostic only. The correct fix — wrap in useCallback,
+    // preserve `async`, and ensure `useCallback` is imported from React (creating or
+    // augmenting the import, including the no-import and default-only cases) — needs
+    // transforms GritQL cannot do idempotently. They live in `fixers/prefer-usecallback.ts`
+    // instead: run `biome check --write .` first, then `bun run fix:prefer-usecallback` to
+    // apply them. Keeping the fix in a script (opt-in) rather than an `unsafe` GritQL rewrite
+    // avoids the non-idempotent import synthesis that loops under `biome --write`.
     //
-    // Two forms. First: an arrow/function-expression assigned to a `const`. The
-    // rewrite wraps the function node itself, so `const`, name, and any type
-    // annotation are preserved untouched.
+    // The diagnostic SPAN is what the script keys off, so it is set precisely:
+    //   - const arrow/function-expression form → span is the function node ($fn), so
+    //     the script wraps exactly `$fn` in `useCallback($fn, [])` (async preserved,
+    //     since a named/async function expression is legal inside the call).
+    //   - `function` declaration form → span is the whole declaration ($decl), which
+    //     the script rewrites to `const $name = useCallback(<the declaration as a
+    //     function expression>, [])`.
+    //
+    // Form 1: an arrow/function-expression assigned to a `const` (covers `async`, as
+    // $fn captures the whole node).
     js"const $name = $fn" as $decl where {
         $name <: not render_context_name(),
         $fn <: or { JsArrowFunctionExpression(), JsFunctionExpression() },
@@ -280,20 +287,16 @@ or {
         },
         register_diagnostic(
             span = $fn,
-            message = "[react/prefer-usecallback] Function declared at the top level of a component/hook is a new reference every render. Wrap it in useCallback (and fill in its dependencies) so its identity is stable.",
-            severity = "warn",
-            fix_kind = "unsafe"
-        ),
-        $fn => `useCallback($fn, [])`
+            message = "[react/prefer-usecallback] Function declared at the top level of a component/hook is a new reference every render. Wrap it in useCallback (and fill in its dependencies) so its identity is stable — run `npm run fix:usecallback` to apply the fix.",
+            severity = "warn"
+        )
     },
-    // Second: a `function` declaration. Converted to a `const` binding so it can be
-    // wrapped; `$inner <: not $decl` keeps the nested-ness strict (Biome's `within`
-    // is reflexive, so without it the declaration matches itself as its own
-    // enclosing nested function and is wrongly skipped). The `JsFunctionDeclaration()`
-    // guard is required: the `function $name(...) {...}` snippet also matches a
-    // function *expression* (`const X = function () {}`), whose empty `$name` slips
-    // past the name guard — so without it, PascalCase function-expression components
-    // would be rewritten too.
+    // Form 2: a `function` declaration (async or plain — $decl covers both). The
+    // `JsFunctionDeclaration()` guard is required because the `function $name(...)
+    // {...}` snippet also matches a function *expression* (`const X = function () {}`),
+    // whose empty `$name` slips past the name guard. `$inner <: not $decl` keeps the
+    // nested-ness strict (Biome's `within` is reflexive, so without it the declaration
+    // matches itself as its own enclosing nested function and is wrongly skipped).
     js"function $name($params) { $body }" as $decl where {
         $decl <: JsFunctionDeclaration(),
         $name <: not render_context_name(),
@@ -309,10 +312,8 @@ or {
         },
         register_diagnostic(
             span = $decl,
-            message = "[react/prefer-usecallback] Function declared at the top level of a component/hook is a new reference every render. Wrap it in useCallback (and fill in its dependencies) so its identity is stable.",
-            severity = "warn",
-            fix_kind = "unsafe"
-        ),
-        $decl => `const $name = useCallback(($params) => { $body }, [])`
+            message = "[react/prefer-usecallback] Function declared at the top level of a component/hook is a new reference every render. Wrap it in useCallback (and fill in its dependencies) so its identity is stable — run `npm run fix:usecallback` to apply the fix.",
+            severity = "warn"
+        )
     }
 }

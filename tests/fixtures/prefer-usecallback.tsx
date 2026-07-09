@@ -18,3 +18,14 @@ function useThing() {
   const compute = () => 1;
   return compute;
 }
+
+// async forms — the `async` keyword must survive the useCallback wrap
+function AsyncView() {
+  const loadArrow = async () => {
+    await fetchData();
+  };
+  async function loadDecl() {
+    await fetchData();
+  }
+  return <button onClick={loadArrow}>{loadDecl}</button>;
+}

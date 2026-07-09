@@ -40,11 +40,11 @@ const next = { ...props, count: 5 };                // copy instead of mutating
 | `react/no-inline-array-prop` | an array literal passed as a prop to a custom component | Same as above for arrays. | warn |
 | `react/no-inline-function-prop` | a function literal (arrow or `function`) passed as a prop to a custom component | Same as above for functions; wrap in `useCallback` or hoist. | warn |
 | `react/no-jsx-as-prop` | a JSX element passed as a prop to a custom component | A JSX literal is a new element object every render. | warn |
-| `react/prefer-usecallback` | a function declared at the top level of a component/hook body (arrow, function expression, or `function` declaration) | Each render creates a new function reference; passed to a memoized child or used as a hook dependency, it defeats memoization. Wrapping it in `useCallback` keeps the identity stable. | warn (unsafe auto-fix) |
+| `react/prefer-usecallback` | a function declared at the top level of a component/hook body (arrow, function expression, or `function` declaration) | Each render creates a new function reference; passed to a memoized child or used as a hook dependency, it defeats memoization. Wrapping it in `useCallback` keeps the identity stable. | warn (codemod) |
 
-Most rules report a diagnostic only (category `plugin`) with no auto-fix, because the correct repair is
-context-specific — the plugin flags the hazard and leaves the fix to you. The one exception is
-`react/prefer-usecallback`, which carries an **unsafe** auto-fix (see its note below).
+Every rule reports a diagnostic only (category `plugin`) — no rule applies an auto-fix, because the correct
+repair is context-specific. `react/prefer-usecallback` ships a companion **codemod** you run yourself
+([fixers/prefer-usecallback.ts](fixers/prefer-usecallback.ts)) — see its note below.
 
 ### no-use-effect
 
@@ -164,15 +164,35 @@ effect callback, or a `.map` callback is left alone. Names that are themselves a
 (PascalCase or `use*`) are excluded — those are nested components/hooks, covered by
 `no-nested-component-definitions`.
 
-**This is the plugin's only auto-fix, and it is deliberately `unsafe`** — applied only with
-`biome lint --write --unsafe`, shown as a suggestion otherwise. It wraps the function in `useCallback(fn, [])`.
-Three things GritQL structurally cannot resolve, which you must fix by hand after applying it:
+The rule itself is **diagnostic-only**. The repair — wrapping in `useCallback`, adding the import — ships as a
+separate **opt-in codemod** rather than a Biome auto-fix, so you decide when to run it and it can do
+transformations GritQL can't (synthesizing imports, converting a default import) without the risk of an
+infinite-loop rewrite:
 
-1. **The dependency array is left empty (`[]`)** — computing the real dependencies needs dataflow analysis
-   GritQL cannot do. An empty array closes over stale props/state; fill it in.
-2. **The `useCallback` import is not added.**
-3. **A `function` declaration is converted to a `const`**, which changes hoisting — the name is no longer usable
-   above its declaration line.
+```sh
+# 1. let Biome apply its own fixes and formatting first
+biome check --write .
+# 2. then run the codemod over the same paths (defaults to ".")
+bun run node_modules/biome-react-best-practices-plugin/fixers/prefer-usecallback.ts
+# preview without writing:
+bun run node_modules/biome-react-best-practices-plugin/fixers/prefer-usecallback.ts --dry-run
+```
+
+The codemod runs Biome to collect the rule's diagnostics (so it fixes exactly what the rule flags, with the same
+scope), then for each match:
+
+- **wraps the function** in `useCallback(fn, [])` — an arrow/expression is wrapped in place; a `function`
+  declaration becomes `const NAME = useCallback(function NAME(...) {...}, [])`. Using a *named function
+  expression* preserves `async`, generators, and the name (for recursion) with no special-casing.
+- **ensures `useCallback` is imported from React** — adds it to an existing named import, augments a default-only
+  `import React from "react"` to `import React, { useCallback } from "react"`, or prepends a fresh
+  `import { useCallback } from "react"` when there's no React import (Biome's import organizer tidies it on the
+  next `biome check --write`).
+
+It is **idempotent** (a function already wrapped is a call expression, so the rule no longer flags it) and leaves
+the **dependency array empty (`[]`)** — computing real dependencies needs dataflow analysis the codemod does not
+attempt. You **must** fill each `[]` in; an empty array closes over stale props/state. The codemod prints a count
+of callbacks to review.
 
 It also does not judge *whether* a given function benefits from `useCallback` — wrapping a handler that is
 never passed to a memoized child or used as a dependency adds overhead for no gain (see React's own
