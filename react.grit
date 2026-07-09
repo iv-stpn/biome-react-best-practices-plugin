@@ -5,7 +5,7 @@ language js
 //
 // Structurally lints React components for the mistakes that cause bugs
 // (render loops, remounting subtrees, mutated props) and the ones that quietly
-// defeat memoization (new object/array/function/JSX references passed as props
+// defeat memoization (new object/array/JSX references passed as props
 // on every render). Every rule reports a diagnostic only (no auto-fix): the
 // right correction is context-specific, so the plugin flags the hazard and
 // leaves the fix to the author. `prefer-usecallback` diagnostics can be applied
@@ -19,7 +19,6 @@ language js
 //   react/no-props-mutation              — mutating `props` (react-compiler: props are immutable).
 //   react/no-inline-object-prop           — object literal passed as a prop to a custom component.
 //   react/no-inline-array-prop            — array literal passed as a prop to a custom component.
-//   react/no-inline-function-prop         — function literal passed as a prop to a custom component.
 //   react/no-jsx-as-prop                  — JSX element passed as a prop to a custom component.
 //   react/prefer-usecallback              — top-level render function → useCallback (codemod: fixers/prefer-usecallback.ts).
 //
@@ -207,25 +206,11 @@ or {
         )
     },
 
-    // Rule: react/no-inline-function-prop  (eslint-plugin-react-perf)
-    // Bad:  <Widget onSelect={() => go()} />  /  <Widget onSelect={function () {}} />
-    // Good: wrap the handler in useCallback (or hoist it) so its identity holds.
-    JsxExpressionAttributeValue(expression = JsArrowFunctionExpression()) as $prop where {
-        $prop <: within_custom_element(),
-        register_diagnostic(
-            span = $prop,
-            message = "[react/no-inline-function-prop] Inline function prop creates a new reference every render, defeating memoization of the child. Wrap it in useCallback or hoist it.",
-            severity = "warn"
-        )
-    },
-    JsxExpressionAttributeValue(expression = JsFunctionExpression()) as $prop where {
-        $prop <: within_custom_element(),
-        register_diagnostic(
-            span = $prop,
-            message = "[react/no-inline-function-prop] Inline function prop creates a new reference every render, defeating memoization of the child. Wrap it in useCallback or hoist it.",
-            severity = "warn"
-        )
-    },
+    // Note: inline *function* props (arrow / function expression) are covered by
+    // Biome's own `lint/performance/noJsxPropsBind` (since v2.3.11), which also
+    // catches `.bind()`. We omit a `no-inline-function-prop` rule here to avoid
+    // duplicate diagnostics — enable `noJsxPropsBind` in your Biome config
+    // instead. See the README's react-perf section.
 
     // Rule: react/no-jsx-as-prop  (eslint-plugin-react-perf)
     // Bad:  <Widget icon={<Icon />} />

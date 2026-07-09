@@ -16,7 +16,7 @@ the React Hooks _set-state-in-render_ check,
 [`react-compiler`](https://react.dev/learn/react-compiler) (props immutability),
 and
 [`eslint-plugin-react-perf`](https://github.com/cvazac/eslint-plugin-react-perf)
-(inline object/array/function/JSX props).
+(inline object/array/JSX props).
 
 ```tsx
 // flagged
@@ -68,7 +68,6 @@ const next = { ...props, count: 5 }; // copy instead of mutating
 | `react/no-props-mutation`               | writing to `props.x` or calling a mutating array method on `props.x`                                                  | React and the React Compiler assume props are immutable; mutating them breaks memoization and produces inconsistent renders.                                                           | error                            |
 | `react/no-inline-object-prop`           | an object literal passed as a prop to a custom component                                                              | A fresh object is a new reference every render, so a memoized child re-renders anyway.                                                                                                 | warn                             |
 | `react/no-inline-array-prop`            | an array literal passed as a prop to a custom component                                                               | Same as above for arrays.                                                                                                                                                              | warn                             |
-| `react/no-inline-function-prop`         | a function literal (arrow or `function`) passed as a prop to a custom component                                       | Same as above for functions; wrap in `useCallback` or hoist.                                                                                                                           | warn                             |
 | `react/no-jsx-as-prop`                  | a JSX element passed as a prop to a custom component                                                                  | A JSX literal is a new element object every render.                                                                                                                                    | warn                             |
 | `react/prefer-usecallback`              | a function declared at the top level of a component/hook body (arrow, function expression, or `function` declaration) | Each render creates a new function reference; passed to a memoized child or used as a hook dependency, it defeats memoization. Wrapping it in `useCallback` keeps the identity stable. | warn (fixable via fixer script)  |
 
@@ -182,7 +181,6 @@ identifier `props`, not a destructured `{ config }`.
 <Widget
   style={{ color: "red" }}
   items={[1, 2, 3]}
-  onSelect={() => go()}
   icon={<Icon />}
 />;
 
@@ -193,10 +191,17 @@ identifier `props`, not a destructured `{ config }`.
 <Widget style={STABLE_STYLE} onSelect={handleSelect} />;
 ```
 
-The four inline-prop rules fire only when the enclosing element is a **custom
+The three inline-prop rules fire only when the enclosing element is a **custom
 (PascalCase) component** — `<Widget />`, not `<div />`. Host elements can't be
 memoized, so flagging inline props there would be noise. This is a deliberate
 narrowing of `eslint-plugin-react-perf`, which flags all elements.
+
+Inline **function** props (`onSelect={() => go()}`) are intentionally _not_
+covered here — Biome ships its own
+[`lint/performance/noJsxPropsBind`](https://biomejs.dev/linter/rules/no-jsx-props-bind/)
+(since v2.3.11), which flags inline arrows, function expressions, and
+`.bind()` in JSX props. Enable that rule in your Biome config instead of
+duplicating it in this plugin.
 
 ### prefer-usecallback
 
@@ -353,7 +358,7 @@ npm test
 Each rule has a flagged fixture and a safe counterpart: `useEffect` vs.
 `useMemo`; nested vs. module-scope components; setState in render vs. in a
 handler/effect; props mutation vs. spread copy; and inline
-object/array/function/JSX props on a custom component vs. the same on a host
+object/array/JSX props on a custom component vs. the same on a host
 element and with stable references.
 
 Fixer scripts have their own unit tests (run with [Bun](https://bun.sh)),

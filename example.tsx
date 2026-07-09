@@ -46,7 +46,6 @@ function View() {
     <Widget
       style={{ color: "red" }}
       items={[1, 2, 3]}
-      onSelect={() => go()}
       icon={<Icon />}
     />
   );
