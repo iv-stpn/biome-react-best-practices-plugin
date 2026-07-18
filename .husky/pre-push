@@ -1,0 +1,9 @@
+# Ensure bun.lock is up to date with package.json before pushing.
+# If it's stale, refresh it with `bun i` and commit the result so the push
+# carries the updated lockfile.
+if ! bun i --frozen-lockfile >/dev/null 2>&1; then
+  echo "pre-push: bun.lock is out of date — regenerating with \`bun i\`"
+  bun i
+  git add bun.lock
+  git commit -m "chore: refresh bun.lock" --no-verify
+fi
