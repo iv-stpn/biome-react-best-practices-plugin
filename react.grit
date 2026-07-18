@@ -18,9 +18,6 @@ language js
 // react/no-unstable-nested-components, react-hooks set-state-in-render, and
 // react-compiler (props immutability).
 //
-// NOTE: memoization-preservation rules (inline object/array/JSX props,
-// prefer-usecallback) were removed in v2.0.0 — the React Compiler memoizes
-// these automatically, so flagging them is now noise.
 
 // ---------------------------------------------------------------------------
 // Shared helpers
