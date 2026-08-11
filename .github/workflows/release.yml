@@ -26,11 +26,6 @@ jobs:
         with:
           bun-version: latest
 
-      # Configure .npmrc with the npm auth token so `changeset publish` can
-      # publish to the registry. No node-version is set, so the runner's
-      # default Node is used (avoids the Node 20 deprecation warning).
-      - uses: actions/setup-node@v4
-        with:
 
       - run: bun install --frozen-lockfile
 
